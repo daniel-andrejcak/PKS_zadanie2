@@ -18,7 +18,7 @@ addr = ()
 recieverAddr = ('localhost', 12345)
 transmitterAddr = ('localhost', 54321)
 
-switch = True
+switchFlag = True
 
 pathToSaveFile = ''
 
@@ -27,6 +27,7 @@ def send(packet: protocol.Protocol, addr):
     setIdentifier(packet)
     sprava = packet.getFullPacket()
     sock.sendto(sprava, addr)
+    
 
 def setIdentifier(packet: protocol.Protocol) -> None:
     global identifier
@@ -38,7 +39,8 @@ def setIdentifier(packet: protocol.Protocol) -> None:
     if identifier > 0xffff:
         identifier = 0
 
-def checksum(word: str, divisor=0x11021):
+def checksum(packet: protocol.Protocol, divisor=0x11021) -> bool:
+    word = packet.getData()
     word = int.from_bytes(word.encode("utf-8"), byteorder='big')
     word <<= 16
 
@@ -51,7 +53,12 @@ def checksum(word: str, divisor=0x11021):
 
         word ^= divisor
 
-    return protocol.pack('>H', word)
+    word = protocol.pack('>H', word)
+
+    return packet.getChecksum() == word
+
+
+
 
 def fragmentMessage(message: str) -> list[protocol.Protocol]:
     packets = list()
@@ -86,6 +93,7 @@ def buildMessage(packets: list[protocol.Protocol]):
         message += packet.getData()
 
     print(message, end='')
+
 
 
 #funkcia fragmentuje subor na mensie casti a vrati vsetky fragmenty 
@@ -140,6 +148,8 @@ def buildFile(packets: list[protocol.Protocol]) -> None:
     pathToSaveFile = ''
 
 
+
+
 def CLI() -> None:
     global inputBufferQueue, pathToSaveFile
 
@@ -170,16 +180,17 @@ def CLI() -> None:
 
 
 def reciever() -> None:
-    global sock, addr, recieverAddr, transmitterAddr, identifier, isReciever, isTransmitter, switch
+    global isReciever, isTransmitter, switchFlag, sock, addr, recieverAddr, transmitterAddr, identifier
 
+    #nastavenie bool hodnot, pre pouzitie CLI, pripadny SWITCH
     isReciever = True
     isTransmitter = False
-    switch = False
+    switchFlag = False
 
+    #vytvorenie socketu na ktorom pracuje
     sock = socket(AF_INET, SOCK_DGRAM)
     sock.settimeout(5)
     sock.bind(recieverAddr)
-
 
     print(f"Active reciever on {recieverAddr[0]} on port {recieverAddr[1]}")
 
@@ -203,28 +214,28 @@ def reciever() -> None:
         protocolFormatMsg = protocol.Protocol()
         protocolFormatMsg.buildFromBytes(msg)
 
-        
     
-        #TRANSMITTER CLOSED
+        #___________TRANSMITTER CLOSED__________
         if protocolFormatMsg.getType() == "CLOSE":
+
             print(f"TRANSMITTER on {transmitterAddr} was closed. \n If you wish to close reciever, type \"CLOSE RECIEVER\"")
             
-            acceptClose = protocol.Protocol()
-            acceptClose.setType("CLOSE")
+            closeAck = protocol.Protocol()
+            closeAck.setType("CLOSE")
             
-            send(acceptClose, transmitterAddr)
+            send(closeAck, transmitterAddr)
 
 
-            continue
 
-        #SWITCH
+        #______________SWITCH______________
         elif protocolFormatMsg.getType() == "SWITCH":
+
             print(f"TRANSMITTER on {transmitterAddr} initialized switch.")
 
-            acceptSwitch = protocol.Protocol()
-            acceptSwitch.setType("SWITCH")
+            switchAck = protocol.Protocol()
+            switchAck.setType("SWITCH")
             
-            send(acceptSwitch, transmitterAddr)
+            send(switchAck, transmitterAddr)
 
             #TODO zmena adries a portov + vynulovanie identifier 
             identifier = 0
@@ -232,26 +243,29 @@ def reciever() -> None:
 
             sock.close()
 
-            switch = True
+            switchFlag = True
             return
 
-        #RemainConnection
+
+
+        #________REMAIN CONNECTION_________
+        #ak prijeme spravu REMAIN CONNECTION, tak naspat posle taku istu spravu - to sluzi ako ACK pre TRANSMITTER
         elif protocolFormatMsg.getType() == "REMAIN CONNECTION":
-            print("REMAIN CONNECTION")
 
-            remainConnction = protocol.Protocol()
-            remainConnction.setType("REMAIN CONNECTION")
+            print("REMAIN CONNECTION message recieved, sending ACK...")
 
-            send(remainConnction, transmitterAddr)
+            remainConnctionAck = protocol.Protocol()
+            remainConnctionAck.setType("REMAIN CONNECTION")
 
-            continue
+            send(remainConnctionAck, transmitterAddr)
+
 
 
         #MSG
         elif protocolFormatMsg.getType() == "MSG":
 
             #kontrola checksum, ak nesedi, tak posle nAck a transmitter posle znova
-            if protocolFormatMsg.getChecksum() != checksum(protocolFormatMsg.getData()):
+            if not checksum(protocolFormatMsg):
                 print("bad checksum")
                 continue
     
@@ -298,111 +312,122 @@ def reciever() -> None:
                 else:
                     break
 
+
+        #ak dostane nejaky neznamy type - poskodena sprava
         else:
-            print("ERROR")
+            print("Error - wrong type of packet recieved")
             return
 
 
-def transmitter() -> None:
-    global sock, addr, recieverAddr, transmitterAddr, identifier, isReciever, isTransmitter, switch 
 
+def transmitter() -> None:
+    global isReciever, isTransmitter, switchFlag, sock, addr, recieverAddr, transmitterAddr, identifier 
+
+    #nastavenie bool hodnot, pre pouzitie CLI, pripadny SWITCH
     isReciever = False
     isTransmitter = True
-    switch = False
+    switchFlag = False
 
+    #vytvorenie socketu na ktorom pracuje
     sock = socket(AF_INET, SOCK_DGRAM)
-    sock.settimeout(10) #momentalne je to 10 sekund, ale to sa vsetko zmeni ked pribudne ARQ
     sock.bind(transmitterAddr)
 
     print(f"Active transmitter on {transmitterAddr[0]} on port {transmitterAddr[1]}")
 
 
     while True:
-        inputBuffer = None
 
         #po dobu 5 sekund sa snazi nieco poslat, ak to nepojde, tak posle RemainConneciton packet
+        inputBuffer = None
         for _ in range(10):
             try:
                 inputBuffer = inputBufferQueue.pop()
                 break
+
             except:
                 sleep(0.5)
 
 
+
         if inputBuffer:
             #ukoncenie TRANSMITTERa
+            #posle spravu o vypnuti RECIEVEROVI a caka na odpoved - idealna situacia
+            #ak odpoved nepride, tak to zopakuje este 2x kazdych 5 sekund, ak pride odpoved, tak ^
+            #ak ani potom nepride odpoved, tak sa vypne, ale oznami, ze RECIEVER nedostal spravu o ukonceni
             if inputBuffer == "CLOSE TRANSMITTER":
                 
-                packet = protocol.Protocol()
-                packet.setType("CLOSE")
+                close = protocol.Protocol()
+                close.setType("CLOSE")
 
-                send(packet, recieverAddr)
+                #poslanie CLOSE spravy
+                send(close, recieverAddr)
 
-                #prijatie CLOSE spravy / potvrdenie CLOSE od RECIEVERa
+                #prijatie CLOSE spravy - potvrdenie CLOSE od RECIEVERa
                 sock.settimeout(5)
+
                 for _ in range(3):
                     try:
-                        closePacket, recieverAddr = sock.recvfrom(1024)
+                        closeAckPacket, recieverAddr = sock.recvfrom(1024)
                         break
                     except (TimeoutError, ConnectionResetError):
                         continue
                 
                 else:
-                    sock.settimeout(None)
                     print("TRANSMITTER succesfully closed") 
                     print("RECIEVER didnt sent ACK")
                     return 
 
 
-                sock.settimeout(None)
+                closeAck = protocol.Protocol()
+                closeAck.buildFromBytes(closeAckPacket)
 
-                close = protocol.Protocol()
-                close.buildFromBytes(closePacket)
-
-                if close.getType() == "CLOSE":
+                if closeAck.getType() == "CLOSE":
                     print("TRANSMITTER succesfully closed") 
                     return
 
                 else:
-                    print("ERROR")
+                    print("Error - wrong ACK recieved")
                     return
-                
+
 
 
             #vymena TRANSMITTER a RECIEVER
+            #TRANSMITTER posle spravu SWITCH, RECIEVER dostane tuto spravu, posle odpoved, vymenia sa - idealna situacia
+            #ak nedostane odpoved, posle este 2x kazdych 5sek, ak dostane odpoved ^
+            #ak nedostane odpoved, tak napise spravu ze nic z toho a klasicky pokracuje dalej
             elif inputBuffer == "SWITCH":
-                packet = protocol.Protocol()
-                packet.setType("SWITCH")
 
-                send(packet, recieverAddr)
+                switch = protocol.Protocol()
+                switch.setType("SWITCH")
 
-                #prijatie CLOSE spravy / potvrdenie CLOSE od RECIEVERa
+                send(switch, recieverAddr)
+
+                #prijatie SWITCH spravy - potvrdenie SWITCH od RECIEVERa
                 sock.settimeout(5)
                 for _ in range(3):
                     try:
-                        switchPacket, recieverAddr = sock.recvfrom(1024)
+                        switchAckPacket, recieverAddr = sock.recvfrom(1024)
                         break
                     except (TimeoutError, ConnectionResetError):
                         continue
                 
                 else:
-                    print("RECIEVER did not accept SWITCH")
-                    return
+                    print("RECIEVER did not accept SWITCH.\nIf you want to close transmitter, type CLOSE TRANSMITTER.\nIf not, you can continue using the transmitter")
+                    continue
 
-                sock.settimeout(None)
 
-                switch = protocol.Protocol()
-                switch.buildFromBytes(switchPacket)
+                switchAck = protocol.Protocol()
+                switchAck.buildFromBytes(switchAckPacket)
 
-                if switch.getType() == "SWITCH":
+                if switchAck.getType() == "SWITCH":
                     print("TRANSMITTER and RECIEVER succesfully switched") 
 
-                    #TODO zmena adresy, portu + vynulovanie identifier
+                    #zmena adresy, portu + vynulovanie identifier
                     identifier = 0
                     recieverAddr, transmitterAddr = transmitterAddr, recieverAddr
                     
                     sock.close()
-                    switch = True
+                    switchFlag = True
 
                     return
 
@@ -412,7 +437,7 @@ def transmitter() -> None:
 
 
 
-
+            #__________SENDING FILE_____________
             elif len(inputBuffer) >= 4 and inputBuffer[:4 ] == "FILE":
                 inputBuffer = inputBuffer[5:]
 
@@ -422,13 +447,18 @@ def transmitter() -> None:
                     send(packet, recieverAddr)
 
 
+
+            #__________SENDING MESSAGE__________
             else:
+                #________FRAGMENTED MESSAGE________
                 if len(inputBuffer) > fragmentSize:
                     packets = fragmentMessage(inputBuffer)
 
                     for packet in packets:
                         send(packet, recieverAddr)
 
+
+                #_____NOT-FRAGMENTED MESSAGE________
                 else:
                     packet = protocol.Protocol()
                     packet.setType("MSG")
@@ -438,21 +468,28 @@ def transmitter() -> None:
                     send(packet, recieverAddr)
 
 
-        #REMAIN CONNECTION - ak sa 5 sekund neodosle sprava, tak sa posle REMAIN CONNECTION packet, ak na neho pride odpoved, tak cely tento cyklus zacne od znova, ak ale nepride odpoved, tak sa este 2x skusi poslat REMAIN CONNECTION a ak ani na jeden nedostane odpoved, mozeme povazovat komunikaciu za uzavretu a preto sa TRANSMITTER ukonci
+
+        #_______________REMAIN CONNECTION_____________
+        # ak sa 5 sekund neodosle sprava, tak sa posle REMAIN CONNECTION packet, ak na neho pride odpoved, tak cely tento cyklus zacne od znova, ak ale nepride odpoved, tak sa este 2x skusi poslat REMAIN CONNECTION a ak ani na jeden nedostane odpoved, mozeme povazovat komunikaciu za uzavretu a preto sa TRANSMITTER ukonci
         else:
-            packet = protocol.Protocol()
-            packet.setType("REMAIN CONNECTION")
+
+            #vytvorenie packetu pre udrzanie spojenia
+            remainConneciton = protocol.Protocol()
+            remainConneciton.setType("REMAIN CONNECTION")
 
 
-            #prijatie CLOSE spravy / potvrdenie CLOSE od RECIEVERa
+            #v tomto pripade sa posle REMAINCONNECTION sprava a caka sa na odpoved - idealna situacia: reciever dostane tuto spravu a naspat posle packet typu REMAIN CONNECTION
+            #ak odpoved nepride, zopakuje sa to este 2x kazdych 5 sekund, ak pride odpoved, tak ^
+            #ak ani potom nepride ziadna odpoved, tak to znamena, ze sa neda nadviazat spojenie - treba ukoncit transmitter
+
             sock.settimeout(5)
 
             for _ in range(3):
-                send(packet, recieverAddr)
+                send(remainConneciton, recieverAddr)
                 
                 try:
-                    remainConnecitonPacket, recieverAddr = sock.recvfrom(1024)
-                    print("Checking for connection")
+                    remainConnecitonAckPacket, recieverAddr = sock.recvfrom(1024)
+                    #print("Checking for connection")
                     break
                 except (TimeoutError, ConnectionResetError):
                     continue
@@ -462,15 +499,13 @@ def transmitter() -> None:
                 return 
 
 
-            sock.settimeout(None)
-            remainConneciton = protocol.Protocol()
-            remainConneciton.buildFromBytes(remainConnecitonPacket)
+            #ak dostal odpoved, kontrola ci to je odpoved na REMAIN CONNECTION, ktory bol poslany
+            remainConnecitonAck = protocol.Protocol()
+            remainConnecitonAck.buildFromBytes(remainConnecitonAckPacket)
 
-            if remainConneciton.getType() == "REMAIN CONNECTION":
+            if remainConnecitonAck.getType() == "REMAIN CONNECTION":
                 print("Connection was maintained") 
-                
                 continue
-
             else:
                 print("Error - wrong ACK recieved")
                 return
@@ -500,7 +535,7 @@ if __name__ == "__main__":
     node = ''
     
 
-    while switch:
+    while switchFlag:
         if commType == 'R':
             node = Thread(target=reciever)
         elif commType == 'T':
@@ -514,7 +549,7 @@ if __name__ == "__main__":
         node.start()
         node.join()
 
-        if switch and type(switch) == bool:
+        if switchFlag:
             commType = 'R' if commType == 'T' else 'T'
             
 
