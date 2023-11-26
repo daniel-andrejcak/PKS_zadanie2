@@ -26,6 +26,8 @@ class Protocol:
 
         self.data = msg[5:]
 
+
+
     #nastavi typ spravy -> prve 4 bity v hlavicke
     def setType(self, packetType=str) -> None:
         if packetType == "ACK":
@@ -101,12 +103,13 @@ class Protocol:
         self.identifier = pack('>H', identifier)
 
     #vrati ID ako int
-    def getidentifier(self):
+    def getIdentifier(self):
         return int(self.identifier.hex(), 16)
     
 
-    def setChecksum(self, word: str, divisor=0x11021) -> None:
-        word = int.from_bytes(word, byteorder='big')
+    def setChecksum(self) -> None:
+        divisor=0x11021
+        word = int.from_bytes(self.data, byteorder='big')
         word <<= 16
 
         while word.bit_length() > 16:
@@ -129,7 +132,7 @@ class Protocol:
     #zakoduje data(string) do utf-8 formate
     def setData(self, string=str) -> None:
         self.data = string.encode("utf-8")
-        self.setChecksum(self.data)
+        self.setChecksum()
 
     
     #odkoduje data a vrati ich ako string

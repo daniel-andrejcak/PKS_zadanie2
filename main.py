@@ -12,6 +12,7 @@ isReciever = isTransmitter = False
 inputBufferQueue = list()
 
 identifier = 0
+notRecievedArray = []
 
 addr = ()
 
@@ -32,12 +33,12 @@ def send(packet: protocol.Protocol, addr):
 def setIdentifier(packet: protocol.Protocol) -> None:
     global identifier
     
-    packet.setIdentifier(identifier)
-
     identifier += 1
 
     if identifier > 0xffff:
-        identifier = 0
+        identifier = 1
+
+    packet.setIdentifier(identifier)
 
 def checksum(packet: protocol.Protocol, divisor=0x11021) -> bool:
     word = packet.getData()
@@ -59,11 +60,10 @@ def checksum(packet: protocol.Protocol, divisor=0x11021) -> bool:
 
 
 
-
 def fragmentMessage(message: str) -> list[protocol.Protocol]:
     packets = list()
     
-    while len(message) > fragmentSize:
+    while message:
         temp = message[:fragmentSize]
         message = message[fragmentSize:]
 
@@ -71,15 +71,9 @@ def fragmentMessage(message: str) -> list[protocol.Protocol]:
         packet.setType("MSG")
         packet.setFrag("MORE")
         packet.setData(temp)
-
+        
         packets.append(packet)
 
-    packet = protocol.Protocol()
-    packet.setType("MSG")
-    packet.setFrag("MORE")
-    packet.setData(message)
-
-    packets.append(packet)
 
     packets[0].setFrag("FIRST")
     packets[-1].setFrag("LAST")
@@ -92,7 +86,7 @@ def buildMessage(packets: list[protocol.Protocol]):
     for packet in packets:
         message += packet.getData()
 
-    print(message, end='')
+    print(message, end=' ')
 
 
 
@@ -148,34 +142,180 @@ def buildFile(packets: list[protocol.Protocol]) -> None:
     pathToSaveFile = ''
 
 
+#pri RECIEVER funguje identifier ako posledny korektne prijaty packet
+def checkIdentifier(packet: protocol.Protocol()):
+    global identifier, transmitterAddr, notRecievedArray
+
+    if packet.getIdentifier() in notRecievedArray:
+        return
+
+    isCorrect = (identifier + 1) == packet.getIdentifier()
+
+    ack = protocol.Protocol()
+    ack.setType("ACK")
+    ack.setIdentifier(packet.getIdentifier())
+
+    sock.sendto(ack.getFullPacket(), transmitterAddr)
+
+    if isCorrect:
+        identifier = packet.getIdentifier()
+        return True
+
+
+    # na chybajuce packety posle notAck, tieto ID prida do notRecievedArray, kvoli naslednej kontrole
+    if not isCorrect:
+        for i in range(identifier + 1, packet.getIdentifier()):
+            notAck = protocol.Protocol()
+            notAck.setType("ERR")
+            notAck.setIdentifier(i)
+
+            sock.sendto(notAck.getFullPacket(), transmitterAddr)
+
+            notRecievedArray.append(i)
+        
+        return False
+
+
+
+def ARQ(packets: list[protocol.Protocol], addr) -> None:
+    global sock
+
+    sentPacketsQueue = []
+    ackPacket = None
+
+    windowSize = 4 if len(packets) >= 4 else len(packets)
+
+    while packets or sentPacketsQueue:
+
+        while len(sentPacketsQueue) < windowSize and len(packets) != 0:
+            packet = packets.pop(0)
+            send(packet, addr)
+            sentPacketsQueue.append(packet)
+        
+
+        if not ackPacket:
+            try:
+                ackPacket, recieverAddr = sock.recvfrom(1024)
+                ack = protocol.Protocol()
+                ack.buildFromBytes(ackPacket)
+            except (TimeoutError, ConnectionResetError):
+                continue
+        
+
+        packet = sentPacketsQueue.pop(0)
+
+        #ak pride spravny ACK, tak pohoda
+        if packet.getIdentifier() == ack.getIdentifier():
+            ackPacket = None
+            print("spravne dorucene - prisiel ACK na jeden fragment")
+            
+        #ak pride ACK na dalsiu spravu, tak sa to znova da do QUEUE, ktora caka na ACK
+        elif packet.getIdentifier() < ack.getIdentifier():
+            sentPacketsQueue.append(packet) 
+            print("nespravne dorucene - ACK nema spravny ID")
+
+        else:
+            print("ERROR")
+
+            
+
+
 
 
 def CLI() -> None:
-    global inputBufferQueue, pathToSaveFile
+    global inputBufferQueue, pathToSaveFile, fragmentSize
 
     while True:
         inputBuffer = str(input())
 
-        if inputBuffer == "CLOSE RECIEVER":
-            if isReciever:
+        if isReciever:
+            if inputBuffer == "CLOSE RECIEVER":
+                if isReciever:
 
-                print("CLOSING RECIEVER...")
-                sock.close()                
-                print("RECIEVER CLOSED")
+                    print("CLOSING RECIEVER...")
+                    sock.close()                
+                    print("RECIEVER CLOSED")
 
-                return
+                    return
+            
+            elif inputBuffer[:4] == "SAVE" and isReciever:
+                pathToSaveFile = inputBuffer[5:]
 
-        elif inputBuffer == "CLOSE TRANSMITTER":
-            if isTransmitter:
+
+        elif isTransmitter:
+            if inputBuffer == "CLOSE TRANSMITTER":
+                if isTransmitter:
+                    inputBufferQueue.append(inputBuffer)
+
+                    return
+                
+            
+            elif inputBuffer[:9] == "FRAG SIZE":
+                fragmentSize = int(inputBuffer[9:])
+
+
+            else:
                 inputBufferQueue.append(inputBuffer)
 
-                return
-            
-        elif inputBuffer[:4] == "SAVE" and isReciever:
-            pathToSaveFile = inputBuffer[4:] + '\\'
+
+
+def recieveFragMessage(initialPacket: protocol.Protocol()):
+    
+    isComplete = [False, False]
+    packets = [initialPacket]
+
+
+
+    firstPacket = protocol.Protocol()
+    lastPacket = protocol.Protocol()
+
+    if initialPacket.getFrag() == "FIRST":
+        isComplete[0] = True
+        firstPacket = initialPacket
+
+    while True:
+
+        try:
+            packet, transmitterAddr = sock.recvfrom(1024)
+        except (TimeoutError, ConnectionResetError):
+            continue
         
-        else:
-            inputBufferQueue.append(inputBuffer)
+        
+        protocolFormatPacket = protocol.Protocol()
+        protocolFormatPacket.buildFromBytes(packet)
+
+        checkIdentifier(protocolFormatPacket)
+
+
+        if protocolFormatPacket.getFrag() and not isComplete[0]:
+            isComplete[0] = True
+            firstPacket = protocolFormatPacket
+            packets.append(protocolFormatPacket)
+
+        elif protocolFormatPacket.getFrag() == "MORE":
+            packets.append(protocolFormatPacket)
+
+        elif protocolFormatPacket.getFrag() == "LAST" and not isComplete[1]:
+            isComplete[1] = True
+            lastPacket = protocolFormatPacket
+            packets.append(protocolFormatPacket)
+
+        #vsetky packety boli prijate
+        if lastPacket.getIdentifier() - firstPacket.getIdentifier() + 1 == len(packets):
+            break 
+
+
+        
+    packets = sorted(packets, key=lambda packet: packet.getIdentifier())
+
+    buildMessage(packets)
+    
+    print(f"{len(packets)} fragments, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr}")
+
+    
+
+
+
 
 
 
@@ -223,7 +363,7 @@ def reciever() -> None:
             closeAck = protocol.Protocol()
             closeAck.setType("CLOSE")
             
-            send(closeAck, transmitterAddr)
+            sock.sendto(closeAck.getFullPacket(), transmitterAddr)
 
 
 
@@ -235,7 +375,7 @@ def reciever() -> None:
             switchAck = protocol.Protocol()
             switchAck.setType("SWITCH")
             
-            send(switchAck, transmitterAddr)
+            sock.sendto(switchAck.getFullPacket(), transmitterAddr)
 
             #TODO zmena adries a portov + vynulovanie identifier 
             identifier = 0
@@ -252,12 +392,12 @@ def reciever() -> None:
         #ak prijeme spravu REMAIN CONNECTION, tak naspat posle taku istu spravu - to sluzi ako ACK pre TRANSMITTER
         elif protocolFormatMsg.getType() == "REMAIN CONNECTION":
 
-            print("REMAIN CONNECTION message recieved, sending ACK...")
+            #print("REMAIN CONNECTION message recieved, sending ACK...")
 
             remainConnctionAck = protocol.Protocol()
             remainConnctionAck.setType("REMAIN CONNECTION")
 
-            send(remainConnctionAck, transmitterAddr)
+            sock.sendto(remainConnctionAck.getFullPacket(), transmitterAddr)
 
 
 
@@ -268,11 +408,17 @@ def reciever() -> None:
             if not checksum(protocolFormatMsg):
                 print("bad checksum")
                 continue
-    
+            
+            checkIdentifier(protocolFormatMsg)
+
+
             if protocolFormatMsg.getFrag() == "NO":
                 print(f"{protocolFormatMsg.getData()} from {transmitterAddr}")
 
-            elif protocolFormatMsg.getFrag() == "FIRST":
+            else:
+                recieveFragMessage(protocolFormatMsg)
+
+            """elif protocolFormatMsg.getFrag() == "FIRST":
                 packets = [protocolFormatMsg]
 
                 while True:
@@ -289,7 +435,7 @@ def reciever() -> None:
                         buildMessage(packets)
                         
                         print(f" from {transmitterAddr}")
-                        break
+                        break"""
 
 
 
@@ -313,10 +459,11 @@ def reciever() -> None:
                     break
 
 
+
         #ak dostane nejaky neznamy type - poskodena sprava
         else:
             print("Error - wrong type of packet recieved")
-            return
+            continue
 
 
 
@@ -341,7 +488,7 @@ def transmitter() -> None:
         inputBuffer = None
         for _ in range(10):
             try:
-                inputBuffer = inputBufferQueue.pop()
+                inputBuffer = inputBufferQueue.pop(0)
                 break
 
             except:
@@ -360,12 +507,13 @@ def transmitter() -> None:
                 close.setType("CLOSE")
 
                 #poslanie CLOSE spravy
-                send(close, recieverAddr)
 
                 #prijatie CLOSE spravy - potvrdenie CLOSE od RECIEVERa
                 sock.settimeout(5)
 
                 for _ in range(3):
+                    sock.sendto(close.getFullPacket(), recieverAddr)
+                    
                     try:
                         closeAckPacket, recieverAddr = sock.recvfrom(1024)
                         break
@@ -386,26 +534,28 @@ def transmitter() -> None:
                     return
 
                 else:
-                    print("Error - wrong ACK recieved")
+                    print("Error - wrong CLOSE recieved")
                     return
 
 
 
             #vymena TRANSMITTER a RECIEVER
             #TRANSMITTER posle spravu SWITCH, RECIEVER dostane tuto spravu, posle odpoved, vymenia sa - idealna situacia
-            #ak nedostane odpoved, posle este 2x kazdych 5sek, ak dostane odpoved ^
+            #ak nedostane odpoved, posle este 3x kazdych 5sek, ak dostane odpoved ^
             #ak nedostane odpoved, tak napise spravu ze nic z toho a klasicky pokracuje dalej
             elif inputBuffer == "SWITCH":
 
                 switch = protocol.Protocol()
                 switch.setType("SWITCH")
 
-                send(switch, recieverAddr)
 
-                #prijatie SWITCH spravy - potvrdenie SWITCH od RECIEVERa
                 sock.settimeout(5)
+
                 for _ in range(3):
+                    sock.sendto(switch.getFullPacket(), recieverAddr)
+
                     try:
+                        #prijatie SWITCH spravy - potvrdenie SWITCH od RECIEVERa
                         switchAckPacket, recieverAddr = sock.recvfrom(1024)
                         break
                     except (TimeoutError, ConnectionResetError):
@@ -414,6 +564,7 @@ def transmitter() -> None:
                 else:
                     print("RECIEVER did not accept SWITCH.\nIf you want to close transmitter, type CLOSE TRANSMITTER.\nIf not, you can continue using the transmitter")
                     continue
+
 
 
                 switchAck = protocol.Protocol()
@@ -432,7 +583,7 @@ def transmitter() -> None:
                     return
 
                 else:
-                    print("Error - wrong ACK recieved")
+                    print("Error - wrong SWITCH recieved")
                     return
 
 
@@ -454,8 +605,7 @@ def transmitter() -> None:
                 if len(inputBuffer) > fragmentSize:
                     packets = fragmentMessage(inputBuffer)
 
-                    for packet in packets:
-                        send(packet, recieverAddr)
+                    ARQ(packets, recieverAddr)
 
 
                 #_____NOT-FRAGMENTED MESSAGE________
@@ -465,7 +615,7 @@ def transmitter() -> None:
                     packet.setFrag("NO")
                     packet.setData(inputBuffer)
 
-                    send(packet, recieverAddr)
+                    ARQ([packet], recieverAddr)
 
 
 
@@ -485,7 +635,7 @@ def transmitter() -> None:
             sock.settimeout(5)
 
             for _ in range(3):
-                send(remainConneciton, recieverAddr)
+                sock.sendto(remainConneciton.getFullPacket(), recieverAddr)
                 
                 try:
                     remainConnecitonAckPacket, recieverAddr = sock.recvfrom(1024)
@@ -503,11 +653,12 @@ def transmitter() -> None:
             remainConnecitonAck = protocol.Protocol()
             remainConnecitonAck.buildFromBytes(remainConnecitonAckPacket)
 
+
             if remainConnecitonAck.getType() == "REMAIN CONNECTION":
-                print("Connection was maintained") 
+                #print("Connection was maintained") 
                 continue
             else:
-                print("Error - wrong ACK recieved")
+                print("Error - not REMAIN CONNECTION recieved")
                 return
 
 
