@@ -192,10 +192,8 @@ def ARQ(packets: list[protocol.Protocol], addr, simulate=False) -> None:
     
     
     
-    while packets or packetsToResend:
+    while packets or sentPacketsQueue or packetsToResend:
 
-        if len(packets) < 6:
-            pass
 
         while len(sentPacketsQueue) < windowSize and (packets or packetsToResend):
             if packetsToResend:
@@ -212,43 +210,38 @@ def ARQ(packets: list[protocol.Protocol], addr, simulate=False) -> None:
 
 
 
-        currentWindowSize = len(sentPacketsQueue)
+        ackPacket = None
 
-        for _ in range(currentWindowSize):
-            ackPacket = None
+        #packet = sentPacketsQueue.pop(0)
+        
+        if not ackPacket: 
+            try:
+                ackPacket, recieverAddr = sock.recvfrom(1024)
+                ack = protocol.Protocol()
+                ack.buildFromBytes(ackPacket)
+            except (TimeoutError, ConnectionResetError):
+                packetsToResend.append(packet)
+                continue
+        
+        
 
-            #packet = sentPacketsQueue.pop(0)
-            
-            if not ackPacket: 
-                try:
-                    ackPacket, recieverAddr = sock.recvfrom(1024)
-                    ack = protocol.Protocol()
-                    ack.buildFromBytes(ackPacket)
-                except (TimeoutError, ConnectionResetError):
-                    packetsToResend.append(packet)
-                    continue
-            
-            
-            #while sentPacketsQueue:
+        packet = sentPacketsQueue.pop(0)
+
+        #najde packet, na ktory prisiel ACK
+        while sentPacketsQueue and packet.getIdentifier() != ack.getIdentifier():
+            packetsToResend.append(packet)
             packet = sentPacketsQueue.pop(0)
+        
 
+        if ack.getType() == "ERR":
+            if sendAgain:
+                packet.setChecksum()
+                sendAgain = False
+        
+            packetsToResend.append(packet) 
+            print(f"Retransmission of packet {packet.getIdentifier()}")
+        
 
-
-
-            #ak pride spravny ACK
-            if packet.getIdentifier() == ack.getIdentifier():
-                if ack.getType() == "ACK":
-                    print("spravne dorucene - prisiel ACK na jeden fragment")
-
-                elif ack.getType() == "ERR":
-                    if sendAgain:
-                        packet.setChecksum()
-                        sendAgain = False
-                
-                    packetsToResend.append(packet) 
-                    print("nespravne dorucene - checksum nesedi")
-            
-    
 
 
 def checkIntegrity(packet: protocol.Protocol()):
@@ -715,7 +708,7 @@ def transmitter() -> None:
 
 def simulateError() -> None:
     
-    inputBuffer = "9"*65540
+    inputBuffer = "9"*167
     
     packets = fragmentMessage(inputBuffer.encode("utf-8"))
 
@@ -731,7 +724,7 @@ if __name__ == "__main__":
     port = int(input("PORT: "))
     fragmentSize = int(input("Select fragment size: "))"""
 
-    fragmentSize = 1
+    fragmentSize = 4
 
 
     addr = ("localhost", 12345)
