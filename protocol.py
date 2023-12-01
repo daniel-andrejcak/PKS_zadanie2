@@ -9,6 +9,9 @@ class Protocol:
         self.checksum = b'\x00\x00'
         self.data = b''
 
+    def __eq__(self, __value: object) -> bool:
+        return self.identifier == __value.identifier and self.data == __value.data
+
 
     #constructor pre vytvorenie objektu na strane prijimaca
     def buildFromBytes(self, msg) -> None:
@@ -130,15 +133,14 @@ class Protocol:
     
 
     #zakoduje data(string) do utf-8 formate
-    def setData(self, string=str) -> None:
-        self.data = string.encode("utf-8")
+    def setData(self, data=str) -> None:
+        self.data = data
         self.setChecksum()
 
     
     #odkoduje data a vrati ich ako string
     def getData(self):
-        return self.data.decode("utf-8")
-    
+        return self.data
 
     #vrati hlavicku + data
     def getFullPacket(self):
