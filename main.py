@@ -1,8 +1,8 @@
 from socket import socket, AF_INET, SOCK_DGRAM
-from threading import Thread, Event
+from threading import Thread
 from os.path import basename, abspath
 from time import sleep
-from select import select
+
 
 import protocol
 
@@ -185,7 +185,7 @@ def ARQ(packets: list[protocol.Protocol], addr, simulate=False) -> None:
     sendAgain = False
 
     if simulate:
-        packets[-1].checksum = b'\x00\x01'
+        packets[4].checksum = b'\x00\x01'
         badPacket = packets[-1]
         simulate = False
         sendAgain = True
@@ -346,9 +346,7 @@ def recieveFragments(initialPacket: protocol.Protocol()):
 
 
     
-    for packetGroup in packets:
-        packetGroup = sorted(packetGroup, key=lambda packet: packet.getIdentifier())
-
+    packets = [list(dict.fromkeys(sorted(packetGroup, key=lambda packet: packet.getIdentifier()))) for packetGroup in packets]
 
     packets = [packet for packetGroup in packets for packet in packetGroup]
 
@@ -708,7 +706,7 @@ def transmitter() -> None:
 
 def simulateError() -> None:
     
-    inputBuffer = "9"*167
+    inputBuffer = "simulating error, 5th fragment will have bad checksum"
     
     packets = fragmentMessage(inputBuffer.encode("utf-8"))
 
