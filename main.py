@@ -1,6 +1,6 @@
 from socket import socket, AF_INET, SOCK_DGRAM
 from threading import Thread, Event
-from os.path import basename
+from os.path import basename, abspath
 from time import sleep
 from select import select
 
@@ -26,12 +26,12 @@ switchFlag = True
 pathToSaveFile = ''
 
 
+
 def send(packet: protocol.Protocol, addr):
     setIdentifier(packet)
     sprava = packet.getFullPacket()
     sock.sendto(sprava, addr)
     
-
 def setIdentifier(packet: protocol.Protocol) -> None:
     global identifier
 
@@ -66,7 +66,8 @@ def checksum(packet: protocol.Protocol, divisor=0x11021) -> bool:
 
 
 
-def fragmentMessage(message: bytes) -> list[protocol.Protocol]:
+#funkcie fragmentuju spravu / subor na mensie casti a vratia vsetky fragmenty 
+def fragmentMessage(message: bytes, type="MSG") -> list[protocol.Protocol]:
     packets = list()
     
     while message:
@@ -74,7 +75,7 @@ def fragmentMessage(message: bytes) -> list[protocol.Protocol]:
         message = message[fragmentSize:]
 
         packet = protocol.Protocol()
-        packet.setType("MSG")
+        packet.setType(type)
         packet.setFrag("MORE")
         packet.setData(temp)
         
@@ -82,34 +83,25 @@ def fragmentMessage(message: bytes) -> list[protocol.Protocol]:
 
 
     packets[0].setFrag("FIRST")
-    packets[-1].setFrag("LAST")
+
+    if len(packets) > 1:
+        packets[-1].setFrag("LAST")
 
     return packets
 
-def buildMessage(packets: list[protocol.Protocol]):
-    message = b""
-
-    for packet in packets:
-        message += packet.getData()
-
-    print(message.decode("utf-8"), end=' ')
-    print(f"{len(packets)} fragments, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr}")
-
-
-
-#funkcia fragmentuje subor na mensie casti a vrati vsetky fragmenty 
 def fragmentFile(filePath: str) -> list[protocol.Protocol]:
-    packets = []
 
-    fileNamePacket = protocol.Protocol()
-
-    fileNamePacket.setType("FILENAME")
-    fileNamePacket.setData(basename(filePath).encode("utf-8"))
-
-    packets.append(fileNamePacket)
+    fileName = basename(filePath).encode("utf-8")
 
 
-    with open(filePath, "r", encoding="utf-8") as file:
+    packets = fragmentMessage(fileName, "FILENAME")
+
+
+    if len(packets) > 1:
+        packets[-1].setFrag("MORE")
+
+
+    with open(filePath, "rb") as file:
 
         while True:
             data = file.read(fragmentSize)
@@ -120,39 +112,26 @@ def fragmentFile(filePath: str) -> list[protocol.Protocol]:
             packet = protocol.Protocol()
             packet.setType("FILECONTENT")
             packet.setFrag("MORE")
-            packet.setData(data.encode("utf-8"))
+            packet.setData(data)
 
             packets.append(packet)
 
-    if len(packets) > 2:
-        packets[1].setFrag("FIRST")
+
 
     packets[-1].setFrag("LAST")
 
     return packets
 
-def buildFile(packets: list[protocol.Protocol], fileName: str) -> None:
-    global pathToSaveFile
 
 
-    fileNamePackets = filter(lambda packet: packet.getType() == "FILENAME", packets)
-    packets = filter(lambda packet: packet.getType() == "FILECONTENT", packets)
+def buildMessage(packets: list[protocol.Protocol]):
+    message = b""
 
+    for packet in packets:
+        message += packet.getData()
 
-    print("You have recieved a file, please type \"SAVE <path with \\ as delimiter>\" to save the file")
-
-    while not pathToSaveFile:
-        sleep(0.5)
-
-
-
-    pathToSaveFile += buildFileName(fileNamePackets)
-    
-    with open(pathToSaveFile, "w") as file:
-        for packet in packets:
-            file.write(packet.getData().decode("utf-8"))
-
-    pathToSaveFile = ''
+    print(message.decode("utf-8"), end=' ')
+    print(f"{len(packets)} fragments, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr}")
 
 def buildFileName(packets: list[protocol.Protocol()]) -> str:
     
@@ -163,63 +142,31 @@ def buildFileName(packets: list[protocol.Protocol()]) -> str:
     
     return fileName
 
-#pri RECIEVER funguje identifier ako posledny korektne prijaty packet
-def checkIntegrity(packet: protocol.Protocol()):
-    global identifier, transmitterAddr, notRecievedArray
-
-    
-    if checksum(packet):
-        ack = protocol.Protocol()
-        ack.setType("ACK")
-        ack.setIdentifier(packet.getIdentifier())
-
-        sock.sendto(ack.getFullPacket(), transmitterAddr)
-
-        return True
-    
-    else:
-        ack = protocol.Protocol()
-        ack.setType("ERR")
-        ack.setIdentifier(packet.getIdentifier())
-
-        print(f"Wrong checksum on packet {packet.getIdentifier()}")
-
-        sock.sendto(ack.getFullPacket(), transmitterAddr)
-
-        return False
-    
-    
-    
-    
-    
-    if packet.getIdentifier() in notRecievedArray:
-        return
-
-    isCorrect = (identifier + 1) == packet.getIdentifier()
+def buildFile(packets: list[protocol.Protocol]) -> None:
+    global pathToSaveFile
 
 
-    sock.sendto(ack.getFullPacket(), transmitterAddr)
-
-    if isCorrect:
-        identifier = packet.getIdentifier()
-        return True
+    fileNamePackets = filter(lambda packet: packet.getType() == "FILENAME", packets)
+    packets = list(filter(lambda packet: packet.getType() == "FILECONTENT", packets))
 
 
+    print("You have recieved a file, please type \"SAVE <path with \\ as delimiter>\" to save the file")
+
+    while not pathToSaveFile:
+        sleep(0.5)
 
 
+    fileName = buildFileName(fileNamePackets)
 
-    """# na chybajuce packety posle notAck, tieto ID prida do notRecievedArray, kvoli naslednej kontrole
-    if not isCorrect:
-        for i in range(identifier + 1, packet.getIdentifier()):
-            notAck = protocol.Protocol()
-            notAck.setType("ERR")
-            notAck.setIdentifier(i)
 
-            sock.sendto(notAck.getFullPacket(), transmitterAddr)
+    with open(pathToSaveFile + fileName, "wb") as file:
+        for packet in packets:
+            file.write(packet.getData())
 
-            notRecievedArray.append(i)
-        
-        return False"""
+    print(f"{fileName} was succesfully saved in {abspath(pathToSaveFile)}")
+    print(f"{len(list(packets))} fragments, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr}")
+
+    pathToSaveFile = ''
 
 
 
@@ -303,6 +250,33 @@ def ARQ(packets: list[protocol.Protocol], addr, simulate=False) -> None:
             
     
 
+
+def checkIntegrity(packet: protocol.Protocol()):
+    global identifier, transmitterAddr, notRecievedArray
+
+    
+    if checksum(packet):
+        ack = protocol.Protocol()
+        ack.setType("ACK")
+        ack.setIdentifier(packet.getIdentifier())
+
+        sock.sendto(ack.getFullPacket(), transmitterAddr)
+
+        return True
+    
+    else:
+        ack = protocol.Protocol()
+        ack.setType("ERR")
+        ack.setIdentifier(packet.getIdentifier())
+
+        print(f"Wrong checksum on packet {packet.getIdentifier()}")
+
+        sock.sendto(ack.getFullPacket(), transmitterAddr)
+
+        return False
+    
+
+
 def insertToPacketGroup(packets, packet):
     if packets and packets[-1].getIdentifier() > packet.getIdentifier() + WINDOWSIZE:
         return False
@@ -310,15 +284,15 @@ def insertToPacketGroup(packets, packet):
         packets.append(packet)
         return True    
 
-
-def insertToPacketArray(packets, packet):
+def insertToPacketArray(packets, packet) -> None:
     for packetGroup in packets:
         if insertToPacketGroup(packetGroup, packet):
             return
     else:
         packets.append([packet])
 
-
+def packetArrayLen(packets: list) -> int :
+    return sum(len(packetGroup) for packetGroup in packets)
 
 def recieveFragments(initialPacket: protocol.Protocol()):
     
@@ -328,8 +302,8 @@ def recieveFragments(initialPacket: protocol.Protocol()):
     packetGroup = 0
 
 
-    firstPacket = protocol.Protocol()
-    lastPacket = protocol.Protocol()
+    firstPacket = 0
+    lastPacket = 0
 
 
     if checkIntegrity(initialPacket):
@@ -337,11 +311,11 @@ def recieveFragments(initialPacket: protocol.Protocol()):
 
         if initialPacket.getFrag() == "FIRST":
             isComplete[0] = True
-            firstPacket = initialPacket
+            firstPacket = initialPacket.getIdentifier()
 
         elif initialPacket.getFrag() == "LAST":
             isComplete[1] = True
-            lastPacket = initialPacket
+            lastPacket = initialPacket.getIdentifier()
 
     while True:
 
@@ -364,22 +338,17 @@ def recieveFragments(initialPacket: protocol.Protocol()):
         insertToPacketArray(packets, protocolFormatPacket)
 
 
-
-
         if protocolFormatPacket.getFrag() == "FIRST" and not isComplete[0]:
             isComplete[0] = True
-            firstPacket = protocolFormatPacket
+            firstPacket = protocolFormatPacket.getIdentifier()
             
         elif protocolFormatPacket.getFrag() == "LAST" and not isComplete[1]:
             isComplete[1] = True
-            lastPacket = protocolFormatPacket
-            break #toto je len docasne riesenie
-
+            lastPacket = protocolFormatPacket.getIdentifier()
         
 
-
         #vsetky packety boli prijate
-        if lastPacket.getIdentifier() != 0 and lastPacket.getIdentifier() + ((len(packets) - 1) * 0xffff) - firstPacket.getIdentifier() + 1 == packetArrayLen(packets):
+        if lastPacket != 0 and lastPacket + ((len(packets) - 1) * 0xffff) - firstPacket + 1 == packetArrayLen(packets):
             break
 
 
@@ -398,10 +367,6 @@ def recieveFragments(initialPacket: protocol.Protocol()):
         buildFile(packets)
         
 
-
-
-def packetArrayLen(packets: list) -> int :
-    return sum(len(packetGroup) for packetGroup in packets)
 
     
 
@@ -442,8 +407,6 @@ def CLI() -> None:
 
             else:
                 inputBufferQueue.append(inputBuffer)
-
-
 
 def reciever() -> None:
     global isReciever, isTransmitter, switchFlag, sock, addr, recieverAddr, transmitterAddr, identifier
@@ -542,22 +505,7 @@ def reciever() -> None:
 
         #FILE
         elif protocolFormatMsg.getType() == "FILENAME":
-            packets = [protocolFormatMsg]
-
-            while True:
-                msg, transmitterAddr = sock.recvfrom(1024)
-                protocolFormatMsg = protocol.Protocol()
-                protocolFormatMsg.buildFromBytes(msg)
-
-                if protocolFormatMsg.getType() == "FILECONTENT":
-                    packets.append(protocolFormatMsg)
-
-                    if protocolFormatMsg.getFrag() == "LAST":
-                        buildFile(packets)
-                        break
-
-                else:
-                    break
+            recieveFragments(protocolFormatMsg)
 
 
 
@@ -565,8 +513,6 @@ def reciever() -> None:
         else:
             print("Error - wrong type of packet recieved")
             continue
-
-
 
 def transmitter() -> None:
     global isReciever, isTransmitter, switchFlag, sock, addr, recieverAddr, transmitterAddr, identifier 
@@ -695,8 +641,7 @@ def transmitter() -> None:
 
                 packets = fragmentFile(inputBuffer)
 
-                for packet in packets:
-                    send(packet, recieverAddr)
+                ARQ(packets, recieverAddr)
 
 
 
@@ -764,6 +709,8 @@ def transmitter() -> None:
             else:
                 print("Error - not REMAIN CONNECTION recieved")
                 return
+
+
 
 
 def simulateError() -> None:
