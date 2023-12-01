@@ -11,6 +11,12 @@ class Protocol:
 
     def __eq__(self, __value: object) -> bool:
         return self.identifier == __value.identifier and self.data == __value.data
+    
+
+    def __hash__(self) -> int:
+        byteData = (self.identifier + self.checksum + self.data)
+
+        return hash(byteData) % 0xffff
 
 
     #constructor pre vytvorenie objektu na strane prijimaca
