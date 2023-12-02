@@ -16,7 +16,6 @@ inputBufferQueue = list()
 identifier = 0
 notRecievedArray = []
 
-addr = ()
 
 recieverAddr = ('localhost', 12345)
 transmitterAddr = ('localhost', 54321)
@@ -29,8 +28,8 @@ pathToSaveFile = ''
 
 def send(packet: protocol.Protocol, addr):
     setIdentifier(packet)
-    sprava = packet.getFullPacket()
-    sock.sendto(sprava, addr)
+    packet = packet.getFullPacket()
+    sock.sendto(packet, addr)
     
 def setIdentifier(packet: protocol.Protocol) -> None:
     global identifier
@@ -101,21 +100,24 @@ def fragmentFile(filePath: str) -> list[protocol.Protocol]:
         packets[-1].setFrag("MORE")
 
 
-    with open(filePath, "rb") as file:
+    try:
+        with open(filePath, "rb") as file:
 
-        while True:
-            data = file.read(fragmentSize)
-        
-            if not data:
-                break
-        
-            packet = protocol.Protocol()
-            packet.setType("FILECONTENT")
-            packet.setFrag("MORE")
-            packet.setData(data)
+            while True:
+                data = file.read(fragmentSize)
+            
+                if not data:
+                    break
+            
+                packet = protocol.Protocol()
+                packet.setType("FILECONTENT")
+                packet.setFrag("MORE")
+                packet.setData(data)
 
-            packets.append(packet)
+                packets.append(packet)
 
+    except FileNotFoundError as e:
+        raise e
 
 
     packets[-1].setFrag("LAST")
@@ -131,7 +133,7 @@ def buildMessage(packets: list[protocol.Protocol]):
         message += packet.getData()
 
     print(message.decode("utf-8"), end=' ')
-    print(f"{len(packets)} fragments, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr}")
+    print(f"({len(packets)} fragments, total size {sum(len(packet.getData()) for packet in packets)}B from {transmitterAddr})")
 
 def buildFileName(packets: list[protocol.Protocol()]) -> str:
     
@@ -158,13 +160,20 @@ def buildFile(packets: list[protocol.Protocol]) -> None:
 
     fileName = buildFileName(fileNamePackets)
 
+    while True:
+        try:
+            with open(pathToSaveFile + fileName, "wb") as file:
+                for packet in packets:
+                    file.write(packet.getData())
 
-    with open(pathToSaveFile + fileName, "wb") as file:
-        for packet in packets:
-            file.write(packet.getData())
+            break
+        except FileNotFoundError:
+            print(f"No such directory: {pathToSaveFile}")
+            continue
+
 
     print(f"{fileName} was succesfully saved in {abspath(pathToSaveFile)}")
-    print(f"{len(list(packets))} fragments, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr}")
+    print(f"({len(list(packets))} fragments, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr})")
 
     pathToSaveFile = ''
 
@@ -262,7 +271,7 @@ def checkIntegrity(packet: protocol.Protocol()):
         ack.setType("ERR")
         ack.setIdentifier(packet.getIdentifier())
 
-        print(f"Wrong checksum on packet {packet.getIdentifier()}")
+        print(f"Bad checksum on packet {packet.getIdentifier()}")
 
         sock.sendto(ack.getFullPacket(), transmitterAddr)
 
@@ -358,8 +367,14 @@ def recieveFragments(initialPacket: protocol.Protocol()):
         buildFile(packets)
         
 
+def initSwitchFromReciever():
+    global sock, transmitterAddr
 
-    
+    packet = protocol.Protocol()
+    packet.setType("SWITCH")
+
+    sock.sendto(packet.getFullPacket(), transmitterAddr)
+
 
 def CLI() -> None:
     global inputBufferQueue, pathToSaveFile, fragmentSize
@@ -377,8 +392,12 @@ def CLI() -> None:
 
                     return
             
-            elif inputBuffer[:4] == "SAVE" and isReciever:
+            elif inputBuffer == "SWITCH":
+                initSwitchFromReciever()
+
+            elif inputBuffer[:4] == "SAVE":
                 pathToSaveFile = inputBuffer[5:]
+
 
 
         elif isTransmitter:
@@ -390,8 +409,18 @@ def CLI() -> None:
                 
             
             elif inputBuffer[:9] == "FRAG SIZE":
-                fragmentSize = int(inputBuffer[9:])
+                try:
+                    temp = int(inputBuffer[9:])
+                    
+                    if temp > 1467:
+                        print("Max fragment size is 1467B")
+                        continue
 
+                    fragmentSize = temp
+
+                except ValueError:
+                    print("Invalid fragment size")
+                    continue
 
             elif inputBuffer == "SIMULATE ERROR":
                 simulateError()
@@ -400,7 +429,7 @@ def CLI() -> None:
                 inputBufferQueue.append(inputBuffer)
 
 def reciever() -> None:
-    global isReciever, isTransmitter, switchFlag, sock, addr, recieverAddr, transmitterAddr, identifier
+    global isReciever, isTransmitter, switchFlag, sock, recieverAddr, transmitterAddr, identifier
 
     #nastavenie bool hodnot, pre pouzitie CLI, pripadny SWITCH
     isReciever = True
@@ -427,7 +456,7 @@ def reciever() -> None:
                 return
         
         else:
-            print("No message recieved from transmitter, if you wish not to continue type CLOSE RECIEVER")
+            print("No message recieved from transmitter, if you wish not to continue type \"CLOSE RECIEVER\"")
             continue
 
 
@@ -450,7 +479,7 @@ def reciever() -> None:
         #______________SWITCH______________
         elif protocolFormatMsg.getType() == "SWITCH":
 
-            print(f"TRANSMITTER on {transmitterAddr} initialized switch.")
+            print("SWITCHING...")
 
             switchAck = protocol.Protocol()
             switchAck.setType("SWITCH")
@@ -472,7 +501,6 @@ def reciever() -> None:
         #ak prijeme spravu REMAIN CONNECTION, tak naspat posle taku istu spravu - to sluzi ako ACK pre TRANSMITTER
         elif protocolFormatMsg.getType() == "REMAIN CONNECTION":
 
-            #print("REMAIN CONNECTION message recieved, sending ACK...")
 
             remainConnctionAck = protocol.Protocol()
             remainConnctionAck.setType("REMAIN CONNECTION")
@@ -506,7 +534,7 @@ def reciever() -> None:
             continue
 
 def transmitter() -> None:
-    global isReciever, isTransmitter, switchFlag, sock, addr, recieverAddr, transmitterAddr, identifier 
+    global isReciever, isTransmitter, switchFlag, sock, recieverAddr, transmitterAddr, identifier 
 
     #nastavenie bool hodnot, pre pouzitie CLI, pripadny SWITCH
     isReciever = False
@@ -524,7 +552,7 @@ def transmitter() -> None:
 
         #po dobu 5 sekund sa snazi nieco poslat, ak to nepojde, tak posle RemainConneciton packet
         inputBuffer = None
-        for _ in range(1000):
+        for _ in range(10):
             try:
                 inputBuffer = inputBufferQueue.pop(0)
                 break
@@ -571,9 +599,6 @@ def transmitter() -> None:
                     print("TRANSMITTER succesfully closed") 
                     return
 
-                else:
-                    print("Error - wrong CLOSE recieved")
-                    return
 
 
 
@@ -600,7 +625,7 @@ def transmitter() -> None:
                         continue
                 
                 else:
-                    print("RECIEVER did not accept SWITCH.\nIf you want to close transmitter, type CLOSE TRANSMITTER.\nIf not, you can continue using the transmitter")
+                    print("RECIEVER did not accept SWITCH.\nIf you want to close transmitter, type \"CLOSE TRANSMITTER\".\nIf not, you can continue using the transmitter")
                     continue
 
 
@@ -621,7 +646,7 @@ def transmitter() -> None:
                     return
 
                 else:
-                    print("Error - wrong SWITCH recieved")
+                    print("Error - wrong packet recieved")
                     return
 
 
@@ -630,10 +655,12 @@ def transmitter() -> None:
             elif len(inputBuffer) >= 4 and inputBuffer[:4 ] == "FILE":
                 inputBuffer = inputBuffer[5:]
 
-                packets = fragmentFile(inputBuffer)
+                try:
+                    packets = fragmentFile(inputBuffer)
+                    ARQ(packets, recieverAddr)
 
-                ARQ(packets, recieverAddr)
-
+                except FileNotFoundError:
+                    print("File not found")
 
 
             #__________SENDING MESSAGE__________
@@ -643,8 +670,8 @@ def transmitter() -> None:
 
                 #________FRAGMENTED MESSAGE________
                 if len(inputBuffer) > fragmentSize:
-                    packets = fragmentMessage(inputBuffer)
 
+                    packets = fragmentMessage(inputBuffer)
                     ARQ(packets, recieverAddr)
 
 
@@ -679,13 +706,12 @@ def transmitter() -> None:
                 
                 try:
                     remainConnecitonAckPacket, recieverAddr = sock.recvfrom(1024)
-                    #print("Checking for connection")
                     break
                 except (TimeoutError, ConnectionResetError):
                     continue
             
             else:
-                print("Could not reach, type CLOSE TRANSMITTER to close the transmitter")
+                print("Could not reach, type \"CLOSE TRANSMITTER\" to close the transmitter")
                 return 
 
 
@@ -697,8 +723,20 @@ def transmitter() -> None:
             if remainConnecitonAck.getType() == "REMAIN CONNECTION":
                 #print("Connection was maintained") 
                 continue
+
+            elif remainConnecitonAck.getType() == "SWITCH":
+                inputBufferQueue.append("SWITCH")
+
+                try:
+                    remainConnecitonAckPacket, recieverAddr = sock.recvfrom(1024)
+                except (TimeoutError, ConnectionResetError):
+                    continue
+
+
+
+
             else:
-                print("Error - not REMAIN CONNECTION recieved")
+                print("Error - wrong packet recieved")
                 return
 
 
@@ -714,18 +752,40 @@ def simulateError() -> None:
 
 
 
+def recieverLoadAddr():
+    global recieverAddr
+    
+    ip = str(input("IP: "))
+    port = int(input("PORT: "))
+    
+    recieverAddr = (ip, port)
+    
+
+
+def transmitterLoadAddr():
+    global transmitterAddr, recieverAddr, fragmentSize
+    
+    ip = str(input("IP: "))
+    port = int(input("PORT: "))
+    transmitterAddr = (ip, port)
+
+    
+    recieverIp = str(input("Reciever IP: "))
+    recieverPort = int(input("Reciever PORT: "))
+    recieverAddr = (recieverIp, recieverPort)
+
+
+
+
 
 if __name__ == "__main__":
     commType = input("R - RECIEVER, T - TRANSMITTER, K - KILL ")
 
-    """ip = bytes(input("IP: "), "utf-8")
-    port = int(input("PORT: "))
-    fragmentSize = int(input("Select fragment size: "))"""
+    if commType == 'R':
+        recieverLoadAddr()
+    elif commType == 'T':
+        transmitterLoadAddr()
 
-    fragmentSize = 4
-
-
-    addr = ("localhost", 12345)
 
     sock = socket(AF_INET, SOCK_DGRAM)
 
@@ -734,6 +794,8 @@ if __name__ == "__main__":
 
     node = ''
     
+    fragmentSize = 4
+
 
     while switchFlag:
         if commType == 'R':
