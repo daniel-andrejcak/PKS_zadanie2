@@ -154,13 +154,13 @@ def buildFile(packets: list[protocol.Protocol]) -> None:
 
     print("You have recieved a file, please type \"SAVE <path with \\ as delimiter>\" to save the file")
 
-    while not pathToSaveFile:
-        sleep(0.5)
 
 
     fileName = buildFileName(fileNamePackets)
 
     while True:
+        while not pathToSaveFile:
+            sleep(0.5)
         try:
             with open(pathToSaveFile + fileName, "wb") as file:
                 for packet in packets:
@@ -168,7 +168,9 @@ def buildFile(packets: list[protocol.Protocol]) -> None:
 
             break
         except FileNotFoundError:
-            print(f"No such directory: {pathToSaveFile}")
+            print(f"No such directory: {pathToSaveFile}, please enter valid directory")
+
+            pathToSaveFile = ''
             continue
 
 
@@ -242,7 +244,8 @@ def ARQ(packets: list[protocol.Protocol], addr, simulate=False) -> None:
                 ack = protocol.Protocol()
                 ack.buildFromBytes(ackPacket)
             except (TimeoutError, ConnectionResetError):
-                packetsToResend.append(packet)
+                packetsToResend = sentPacketsQueue
+                sentPacketsQueue = []
                 continue
         
         
@@ -462,9 +465,10 @@ def reciever() -> None:
     print(f"Active reciever on {recieverAddr[0]} on port {recieverAddr[1]}")
 
     while True:
-        #try except kvoli tomu, ked sa prijimac rozhodne skoncit 
+        protocolFormatMsg = None
 
         for _ in range(5):
+            #try except kvoli tomu, ked sa prijimac rozhodne skoncit 
             try:
                 msg, transmitterAddr = sock.recvfrom(1024)
                 break
@@ -664,7 +668,7 @@ def transmitter() -> None:
                     return
 
                 else:
-                    print("Error - wrong packet recieved")
+                    print("Error - wrong SWITCH recieved")
                     return
 
 
@@ -730,7 +734,7 @@ def transmitter() -> None:
             
             else:
                 print("Could not reach, type \"CLOSE TRANSMITTER\" to close the transmitter")
-                return 
+                continue 
 
 
             #ak dostal odpoved, kontrola ci to je odpoved na REMAIN CONNECTION, ktory bol poslany
@@ -750,11 +754,8 @@ def transmitter() -> None:
                 except (TimeoutError, ConnectionResetError):
                     continue
 
-
-
-
             else:
-                print("Error - wrong packet recieved")
+                print("Error - wrong REMAIN CONNECTION recieved")
                 return
 
 
