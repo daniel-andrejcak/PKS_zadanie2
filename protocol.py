@@ -110,6 +110,8 @@ class Protocol:
     #prevedie int ID na 2B format 
     def setIdentifier(self, identifier: int) -> None:
         self.identifier = pack('>H', identifier)
+        # 0 = \x00\x00
+
 
     #vrati ID ako int
     def getIdentifier(self):

@@ -17,8 +17,8 @@ identifier = 0
 notRecievedArray = []
 
 
-recieverAddr = ('localhost', 12345)
-transmitterAddr = ('localhost', 54321)
+recieverAddr = None
+transmitterAddr = None
 
 switchFlag = True
 
@@ -200,8 +200,21 @@ def ARQ(packets: list[protocol.Protocol], addr, simulate=False) -> None:
         sendAgain = True
     
     
+
+    resendCounter = 0
+
     
     while packets or sentPacketsQueue or packetsToResend:
+
+        if len(packetsToResend) == windowSize:
+            resendCounter += 1
+        else:
+            resendCounter = 0
+
+
+        if resendCounter > 10:
+            print("Unable to send - please turn off the reciever and transmitter and try again")
+            break
 
 
         while len(sentPacketsQueue) < windowSize and (packets or packetsToResend):
@@ -367,6 +380,7 @@ def recieveFragments(initialPacket: protocol.Protocol()):
         buildFile(packets)
         
 
+
 def initSwitchFromReciever():
     global sock, transmitterAddr
 
@@ -377,7 +391,7 @@ def initSwitchFromReciever():
 
 
 def CLI() -> None:
-    global inputBufferQueue, pathToSaveFile, fragmentSize
+    global inputBufferQueue, pathToSaveFile, fragmentSize, transmitterAddr, recieverAddr
 
     while True:
         inputBuffer = str(input())
@@ -393,6 +407,10 @@ def CLI() -> None:
                     return
             
             elif inputBuffer == "SWITCH":
+                if transmitterAddr == None:
+                    print("Transmitter address unknown - transmitter has to send at least 1 message")
+                    continue
+
                 initSwitchFromReciever()
 
             elif inputBuffer[:4] == "SAVE":
