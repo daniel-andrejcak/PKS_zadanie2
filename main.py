@@ -317,7 +317,10 @@ def packetArrayLen(packets: list) -> int :
     return sum(len(packetGroup) for packetGroup in packets)
 
 def recieveFragments(initialPacket: protocol.Protocol()):
-    
+    global sock
+
+    sock.settimeout(5)
+
     isComplete = [False, False]
     packets = [[]]
 
@@ -351,6 +354,10 @@ def recieveFragments(initialPacket: protocol.Protocol()):
         
         protocolFormatPacket = protocol.Protocol()
         protocolFormatPacket.buildFromBytes(packet)
+
+        if protocolFormatPacket.getType() != "MSG" and protocolFormatPacket.getType() != "FILENAME" and protocolFormatPacket.getType() != "FILECONTENT":
+            break 
+
 
 
         if not checkIntegrity(protocolFormatPacket):
@@ -758,8 +765,8 @@ def transmitter() -> None:
                     continue
 
             else:
-                print("Error - wrong REMAIN CONNECTION recieved")
-                return
+                print(f"Error - wrong REMAIN CONNECTION recieved{remainConnecitonAck.getFullPacket()}")
+                continue
 
 
 
