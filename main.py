@@ -641,6 +641,7 @@ def transmitter() -> None:
                 switch = protocol.Protocol()
                 switch.setType("SWITCH")
 
+                switchAck = None
 
                 sock.settimeout(5)
 
@@ -650,18 +651,25 @@ def transmitter() -> None:
                     try:
                         #prijatie SWITCH spravy - potvrdenie SWITCH od RECIEVERa
                         switchAckPacket, recieverAddr = sock.recvfrom(1024)
-                        break
+                    
                     except (TimeoutError, ConnectionResetError):
                         continue
                 
+                    switchAck = protocol.Protocol()
+                    switchAck.buildFromBytes(switchAckPacket)
+                    
+                    if switchAck.getType() == "REMAIN CONNECTION":
+                        continue
+
+                    break
+
                 else:
                     print("RECIEVER did not accept SWITCH.\nIf you want to close transmitter, type \"CLOSE TRANSMITTER\".\nIf not, you can continue using the transmitter")
                     continue
 
 
 
-                switchAck = protocol.Protocol()
-                switchAck.buildFromBytes(switchAckPacket)
+                
 
                 if switchAck.getType() == "SWITCH":
                     print("TRANSMITTER and RECIEVER succesfully switched") 
