@@ -184,6 +184,8 @@ def buildFile(packets: list[protocol.Protocol]) -> None:
 def ARQ(packets: list[protocol.Protocol], addr, simulate=False) -> None:
     global sock
 
+    sock.settimeout(5)
+
     sentPacketsQueue = []
     packetsToResend = []
     ackPacket = None
@@ -244,11 +246,13 @@ def ARQ(packets: list[protocol.Protocol], addr, simulate=False) -> None:
                 ack = protocol.Protocol()
                 ack.buildFromBytes(ackPacket)
             except (TimeoutError, ConnectionResetError):
+                print("Didnt recieve any ACK - retransmitting packets")
                 packetsToResend = sentPacketsQueue
                 sentPacketsQueue = []
                 continue
         
-        
+        if ack.getType() != "ACK" and ack.getType() != "ERR":
+            continue
 
         packet = sentPacketsQueue.pop(0)
 
@@ -442,9 +446,6 @@ def CLI() -> None:
                 except ValueError:
                     print("Invalid fragment size")
                     continue
-
-            elif inputBuffer == "SIMULATE ERROR":
-                simulateError()
 
             else:
                 inputBufferQueue.append(inputBuffer)
@@ -671,6 +672,8 @@ def transmitter() -> None:
                     print("Error - wrong SWITCH recieved")
                     return
 
+            elif inputBuffer == "SIMULATE ERROR":
+                simulateError()
 
 
             #__________SENDING FILE_____________
