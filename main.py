@@ -133,7 +133,8 @@ def buildMessage(packets: list[protocol.Protocol]):
         message += packet.getData()
 
     print(message.decode("utf-8"), end=' ')
-    print(f"({len(packets)} fragments, total size {sum(len(packet.getData()) for packet in packets)}B from {transmitterAddr})")
+    print(f"({len(packets)} fragments with max fragment size {len(packets[0].getData())}B, 
+          total size {sum(len(packet.getData()) for packet in packets)}B from {transmitterAddr})")
 
 def buildFileName(packets: list[protocol.Protocol()]) -> str:
     
@@ -175,7 +176,8 @@ def buildFile(packets: list[protocol.Protocol]) -> None:
 
 
     print(f"{fileName} was succesfully saved in {abspath(pathToSaveFile)}")
-    print(f"({len(list(packets))} fragments, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr})")
+    print(f"({len(list(packets))} fragments with max fragment size {len(packets[0].getData())}B, 
+          total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr})")
 
     pathToSaveFile = ''
 

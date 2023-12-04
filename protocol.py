@@ -21,7 +21,7 @@ class Protocol:
 
     #constructor pre vytvorenie objektu na strane prijimaca
     def buildFromBytes(self, msg) -> None:
-        temp = hex(int.from_bytes(msg[:1]))[2:]
+        temp = hex(int.from_bytes(msg[:1], byteorder="big"))[2:]
 
         if temp == '0':
             self.type = '0'
@@ -140,13 +140,11 @@ class Protocol:
         return self.checksum
     
 
-    #zakoduje data(string) do utf-8 formate
     def setData(self, data=str) -> None:
         self.data = data
         self.setChecksum()
 
     
-    #odkoduje data a vrati ich ako string
     def getData(self):
         return self.data
 
