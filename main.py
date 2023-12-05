@@ -708,7 +708,7 @@ def transmitter() -> None:
             else:
                 
                 """DOIMPLEMENTACIA"""
-                inputBuffer = cipher(inputBuffer)
+                #inputBuffer = cipher(inputBuffer)
                 inputBuffer = inputBuffer.encode("utf-8")
 
                 #________FRAGMENTED MESSAGE________
