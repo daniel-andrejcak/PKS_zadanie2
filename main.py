@@ -133,8 +133,7 @@ def buildMessage(packets: list[protocol.Protocol]):
         message += packet.getData()
 
     print(message.decode("utf-8"), end=' ')
-    print(f"({len(packets)} fragments with max fragment size {len(packets[0].getData())}B, 
-          total size {sum(len(packet.getData()) for packet in packets)}B from {transmitterAddr})")
+    print(f"({len(packets)} fragments with max fragment size {len(packets[0].getData())}B, total size {sum(len(packet.getData()) for packet in packets)}B from {transmitterAddr})")
 
 def buildFileName(packets: list[protocol.Protocol()]) -> str:
     
@@ -176,8 +175,7 @@ def buildFile(packets: list[protocol.Protocol]) -> None:
 
 
     print(f"{fileName} was succesfully saved in {abspath(pathToSaveFile)}")
-    print(f"({len(list(packets))} fragments with max fragment size {len(packets[0].getData())}B, 
-          total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr})")
+    print(f"({len(list(packets))} fragments with max fragment size {len(packets[0].getData())}B, total size {sum(len(packet.getData()) for packet in packets)} B from {transmitterAddr})")
 
     pathToSaveFile = ''
 
@@ -326,8 +324,6 @@ def recieveFragments(initialPacket: protocol.Protocol()):
     isComplete = [False, False]
     packets = [[]]
 
-    packetGroup = 0
-
 
     firstPacket = 0
     lastPacket = 0
@@ -446,8 +442,8 @@ def CLI() -> None:
                 try:
                     temp = int(inputBuffer[9:])
                     
-                    if temp > 1467:
-                        print("Max fragment size is 1467B")
+                    if temp > 1427:
+                        print("Max fragment size is 1427B")
                         continue
 
                     fragmentSize = temp
@@ -604,14 +600,14 @@ def transmitter() -> None:
                 close = protocol.Protocol()
                 close.setType("CLOSE")
 
-                #poslanie CLOSE spravy
 
-                #prijatie CLOSE spravy - potvrdenie CLOSE od RECIEVERa
                 sock.settimeout(5)
 
                 for _ in range(3):
+                    #poslanie CLOSE spravy
                     sock.sendto(close.getFullPacket(), recieverAddr)
                     
+                    #prijatie CLOSE spravy - potvrdenie CLOSE od RECIEVERa
                     try:
                         closeAckPacket, recieverAddr = sock.recvfrom(1024)
                         break
@@ -629,6 +625,9 @@ def transmitter() -> None:
 
                 if closeAck.getType() == "CLOSE":
                     print("TRANSMITTER succesfully closed") 
+                    return
+                
+                else:
                     return
 
 
@@ -707,7 +706,9 @@ def transmitter() -> None:
 
             #__________SENDING MESSAGE__________
             else:
-
+                
+                """DOIMPLEMENTACIA"""
+                inputBuffer = cipher(inputBuffer)
                 inputBuffer = inputBuffer.encode("utf-8")
 
                 #________FRAGMENTED MESSAGE________
@@ -775,14 +776,42 @@ def transmitter() -> None:
                     continue
 
             else:
-                print(f"Error - wrong REMAIN CONNECTION recieved{remainConnecitonAck.getFullPacket()}")
+                #print(f"Error - wrong REMAIN CONNECTION recieved{remainConnecitonAck.getFullPacket()}")
                 continue
 
 
 
+"""DOIMPLEMENTACIA"""
+def cipher(input):
+    SHIFT = 5
+    output = ""
 
+    for i in range(len(input)):
+        c = input[i]
+ 
+        if not c.isalpha():
+            output += c
+            continue
+
+
+        if (c.isupper()):
+            output += chr(65 + ((ord(c) + SHIFT - 65) % 26))
+ 
+        else:
+            output += chr(97 + ((ord(c) + SHIFT - 97) % 26))
+
+
+
+    return "___" + output + "___"
+
+
+
+#simulacia chyby v prenose
 def simulateError() -> None:
+    global fragmentSize, inputBuffer
     
+    fragmentSize = 4
+
     inputBuffer = "simulating error, 5th fragment will have bad checksum"
     
     packets = fragmentMessage(inputBuffer.encode("utf-8"))
@@ -790,7 +819,7 @@ def simulateError() -> None:
     ARQ(packets, recieverAddr, True)
 
 
-
+#funkcie na nacitanie adries
 def recieverLoadAddr():
     global recieverAddr
     
@@ -799,8 +828,6 @@ def recieverLoadAddr():
     
     recieverAddr = (ip, port)
     
-
-
 def transmitterLoadAddr():
     global transmitterAddr, recieverAddr, fragmentSize
     
@@ -824,6 +851,8 @@ if __name__ == "__main__":
         recieverLoadAddr()
     elif commType == 'T':
         transmitterLoadAddr()
+    elif commType == 'K':
+        exit()
 
 
     sock = socket(AF_INET, SOCK_DGRAM)
@@ -841,8 +870,6 @@ if __name__ == "__main__":
             node = Thread(target=reciever)
         elif commType == 'T':
             node = Thread(target=transmitter)
-        elif commType == 'K':
-            break
         else:
             print("error")
             break
